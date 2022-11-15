@@ -6,7 +6,7 @@ This code is meant to transform nano-ntuples to plain .npz files suitable for tr
 ## Setup
 
 ```
-pip install https://github.com/boostedsvj/hgcal_npz/archive/main.zip
+pip install https://github.com/tklijnsma/hgcal_npz/archive/main.zip
 # To be replaced with something in PyPI once things stabilize.
 ```
 
