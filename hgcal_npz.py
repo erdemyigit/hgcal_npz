@@ -97,6 +97,15 @@ class DataFrame:
     def __eq__(self, other):
         return self.keys == other.keys and np.array_equal(self.array, other.array)
 
+    def to_numpy(self, columns=None):
+        """
+        Returns a numpy array of the requested columns.
+        If `columns` is None, all columns are returned
+        """
+        if columns is None: return self.array
+        selected_col_idxs = np.array([self.keys.index(c) for c in columns])
+        return self.array[:,selected_col_idxs]
+
 
 class Event:
     """

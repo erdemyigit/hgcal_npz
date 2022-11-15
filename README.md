@@ -1,33 +1,26 @@
 ## About
 
-This code is meant to transform Nano Ntuples to plain .npz files.
+This code is meant to transform nano-ntuples to plain .npz files suitable for training, and to provide a light-weight interface to load these .npz files.
 
 
 ## Setup
 
-For producing .npz files from .root files:
-
 ```
-pip install uproot awkward seutils
-```
-
-For testing:
-
-```
-pip install uproot awkward seutils pytest
+pip install https://github.com/boostedsvj/hgcal_npz/archive/main.zip
+# To be replaced with something in PyPI once things stabilize.
 ```
 
+Depending on the usecase, there are some dependencies.
 For reading .npz files only:
 
 ```
 pip install numpy
 ```
 
-In any case:
+For producing .npz files from .root files:
 
 ```
-pip install https://github.com/boostedsvj/hgcal_npz/archive/main.zip
-# To be replaced with something in PyPI once things stabilize.
+pip install uproot awkward seutils
 ```
 
 
@@ -60,11 +53,17 @@ array([[-4.13478661e+01, -1.60157740e+00,  3.22102753e+02, ...,
 (117294, 7)
 ```
 
+`Event.load` also supports remote files (`root://foo.bar.edu//store/...`).
+
+
 For producing .npz files from a .root file, there is a command line script:
 
 ```bash
 hgcal_nano_to_npz seed0_n100.root seed1_n100.root -d outdir --nthreads 2
 ```
+
+The destination argument `-d` also supports remote locations.
+
 
 For taking a peek in an .npz file via the command line:
 
@@ -110,4 +109,13 @@ $ hgcal_npz_ls testdir/seed0_n100_000.npz
       'MergedSimCluster_recEnergy',
       'MergedSimCluster_pdgId',
       'MergedSimCluster_trackIdAtBoundary']
+```
+
+
+## Run the tests
+
+Running the tests requires `pytest` on top of the other dependencies. To run:
+
+```
+pytest test.py
 ```

@@ -1,5 +1,5 @@
 import os.path as osp
-import seutils, uproot
+import seutils, uproot, numpy as np
 import hgcal_npz
 
 
@@ -32,6 +32,9 @@ def test_events_factory():
     assert len(event.simtracks.keys) == event.simtracks.array.shape[1]
     assert len(event.simclusters) == len(simcluster_pdgid)
     assert len(event.simclusters.keys) == event.simclusters.array.shape[1]
+
+    np.testing.assert_array_equal(rechit_x, event.rechits.to_numpy(['RecHitHGC_x']).flatten())
+    np.testing.assert_array_equal(simcluster_pdgid, event.simclusters.to_numpy(['MergedSimCluster_pdgId']).flatten())
 
 
 def test_io():
