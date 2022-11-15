@@ -1,0 +1,4 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+import hgcal_npz
+hgcal_npz.cli_ls()
