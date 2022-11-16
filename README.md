@@ -17,6 +17,8 @@ For reading .npz files only:
 pip install numpy
 ```
 
+(add `seutils` for reading remote files as well; requires `xrdcp` to be installed on the system.)
+
 For producing .npz files from .root files:
 
 ```
@@ -53,7 +55,7 @@ array([[-4.13478661e+01, -1.60157740e+00,  3.22102753e+02, ...,
 (117294, 7)
 ```
 
-`Event.load` also supports remote files (`root://foo.bar.edu//store/...`).
+`Event.load` also supports remote files (`root://foo.bar.edu//store/...`) if `seutils` is installed.
 
 
 For producing .npz files from a .root file, there is a command line script:
