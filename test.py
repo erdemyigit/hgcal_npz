@@ -50,3 +50,79 @@ def test_io():
 
     other.metadata.pop('npz_file', None)
     assert event.metadata == other.metadata
+
+
+def test_split_and_flip():
+    event = hgcal_npz.Event()
+    event.rechits = hgcal_npz.DataFrame(['hitvar_x', 'hitvar_z', 'hitvar_eta'])
+    event.rechits.array = np.array([
+        [2., -2., -2.],
+        [1., -1., -1.],
+        [1., 1., 1.],
+        [2., 2., 2.],
+        ])
+    event.simtracks = hgcal_npz.DataFrame(['trackvar_x', 'trackvar_z', 'trackvar_eta'])
+    event.simtracks.array = np.array([
+        [2., -2., -2.],
+        [1., -1., -1.],
+        [1., 1., 1.],
+        [2., 2., 2.],
+        ])
+    event.simclusters = hgcal_npz.DataFrame(['clusvar_x', 'clusvar_z', 'clusvar_eta'])
+    event.simclusters.array = np.array([
+        [-2., -2., -2.],
+        [1., -1., -1.],
+        [1., 1., 1.],
+        [2., 2., 2.],
+        ])
+
+    pos, neg = hgcal_npz.split(event, ['hitvar_z', 'trackvar_z', 'clusvar_z'])
+
+    np.testing.assert_array_equal(
+        pos.rechits.array,
+        np.array([
+            [1., 1., 1.],
+            [2., 2., 2.],
+            ])
+        )
+    np.testing.assert_array_equal(
+        neg.rechits.array,
+        np.array([
+            [2., -2., -2.],
+            [1., -1., -1.],
+            ])
+        )
+    np.testing.assert_array_equal(
+        neg.simclusters.array,
+        np.array([
+            [-2., -2., -2.],
+            [1., -1., -1.],
+            ])
+        )
+
+    hgcal_npz.flip(
+        neg,
+        ['hitvar_z', 'hitvar_eta', 'trackvar_z', 'trackvar_eta', 'clusvar_z', 'clusvar_eta']
+        )
+
+    np.testing.assert_array_equal(
+        pos.rechits.array,
+        np.array([
+            [1., 1., 1.],
+            [2., 2., 2.],
+            ])
+        )
+    np.testing.assert_array_equal(
+        neg.rechits.array,
+        np.array([
+            [2., 2., 2.],
+            [1., 1., 1.],
+            ])
+        )
+    np.testing.assert_array_equal(
+        neg.simclusters.array,
+        np.array([
+            [-2., 2., 2.],
+            [1., 1., 1.],
+            ])
+        )

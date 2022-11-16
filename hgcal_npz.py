@@ -97,6 +97,12 @@ class DataFrame:
     def __eq__(self, other):
         return self.keys == other.keys and np.array_equal(self.array, other.array)
 
+    def copy(self):
+        copy = DataFrame()
+        copy.keys = self.keys.copy()
+        copy.array = self.array[:]
+        return copy
+
     def to_numpy(self, columns=None):
         """
         Returns a numpy array of the requested columns.
@@ -105,6 +111,12 @@ class DataFrame:
         if columns is None: return self.array
         selected_col_idxs = np.array([self.keys.index(c) for c in columns])
         return self.array[:,selected_col_idxs]
+
+    def get(self, key):
+        """
+        Gets a single column
+        """
+        return self.array[:, self.keys.index(key)].flatten()
 
 
 class Event:
@@ -132,6 +144,14 @@ class Event:
         self.rechits = DataFrame()
         self.simtracks = DataFrame()
         self.simclusters = DataFrame()
+
+    def copy(self):
+        copy = Event()
+        copy.metadata = self.metadata.copy()
+        copy.rechits = self.rechits.copy()
+        copy.simtracks = self.simtracks.copy()
+        copy.simclusters = self.simclusters.copy()
+        return copy
 
     def save(self, outfile):
         do_stageout = False
@@ -176,8 +196,12 @@ def events_factory(rootfile):
         'RecHitHGC_MergedSimClusterBestMatchIdx',
         'RecHitHGC_MergedSimClusterBestMatchQual',
 
+        'MergedSimCluster_impactPoint_eta',
+        'MergedSimCluster_impactPoint_phi',
+        'MergedSimCluster_impactPoint_x',
+        'MergedSimCluster_impactPoint_y',
+        'MergedSimCluster_impactPoint_z',
         'MergedSimCluster_boundaryEnergy',
-        'MergedSimCluster_boundaryP4',
         'MergedSimCluster_recEnergy',
         'MergedSimCluster_pdgId',
         'MergedSimCluster_trackIdAtBoundary',
@@ -218,7 +242,48 @@ def events_factory(rootfile):
         for df in [event.rechits, event.simtracks, event.simclusters]:
             df.array = np.stack([hlarray[key][i].to_numpy() for key in df.keys]).T
 
-        yield event
+        pos, neg = split(event, fnmatch.filter(branches, '*_z'))
+        flip(neg, fnmatch.filter(branches, '*_z')+fnmatch.filter(branches, '*_eta'))
+        yield pos
+        yield neg
+
+
+def split(event, z_split_branches):
+    """
+    Takes a single event with hits/tracks/clusters in both endcaps,
+    and splits it up into two 'events', one per endcap
+    """
+    pos = event.copy()
+    pos.metadata['endcap'] = 'pos'
+    neg = event.copy()
+    neg.metadata['endcap'] = 'neg'
+
+    for e in [pos, neg]:
+        for df in [e.rechits, e.simclusters, e.simtracks]:
+            for z_branch in z_split_branches:
+                if z_branch in df.keys:
+                    # Found a splittable branch; use it, and don't split
+                    # the dataframe any further
+                    mask = df.get(z_branch) >= 0. if e.metadata['endcap']=='pos' else df.get(z_branch) < 0.
+                    df.array = df.array[mask]
+                    break
+    
+    logger.info(
+        f'Split event {event.metadata}:'
+        f' {len(event.rechits)} hits to {len(pos.rechits)} in pos, {len(neg.rechits)} in neg;'
+        f' {len(event.simtracks)} simtracks to {len(pos.simtracks)} in pos, {len(neg.simtracks)} in neg;'
+        f' {len(event.simclusters)} simclusters to {len(pos.simclusters)} in pos, {len(neg.simclusters)} in neg;'
+        )
+    return pos, neg
+
+
+def flip(event, z_flip_branches):
+    """
+    Multiplies all specified branches by -1.
+    """
+    for df in [event.rechits, event.simclusters, event.simtracks]:
+        for z_branch in z_flip_branches:
+            if z_branch in df.keys: df.array[:,df.keys.index(z_branch)] *= -1.
 
 
 def cli_produce_worker(tup):
@@ -231,7 +296,10 @@ def cli_produce_worker(tup):
         if args.n and n_done==args.n: return
         dst = osp.join(
             args.outdir,
-            osp.basename(rootfile).replace('.root', f'_{event.metadata["i_event"]:03d}.npz')
+            osp.basename(rootfile).replace(
+                '.root',
+                f'_{event.metadata["i_event"]:03d}_{event.metadata["endcap"]}.npz'
+                )
             )
         event.save(dst)
         n_done += 1
