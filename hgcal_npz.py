@@ -118,6 +118,14 @@ class DataFrame:
         """
         return self.array[:, self.keys.index(key)].flatten()
 
+    def add_column(self, key, vals):
+        """
+        Adds a column
+        """
+        assert key not in self.keys
+        self.keys.append(key)
+        self.array = np.column_stack((self.array, np.array(vals)))
+
 
 class Event:
     """
@@ -242,8 +250,18 @@ def events_factory(rootfile):
         for df in [event.rechits, event.simtracks, event.simclusters]:
             df.array = np.stack([hlarray[key][i].to_numpy() for key in df.keys]).T
 
+        # Filter out hits with z=0 - not sure why these appear
+        z_zero = event.rechits.get('RecHitHGC_z') == 0.
+        n_z_zero_hits = z_zero.sum()
+        if n_z_zero_hits:
+            logger.warning(f'Filtering out {n_z_zero_hits} hits with z=0')
+            event.rechits.array = event.rechits.array[~z_zero]
+
         pos, neg = split(event, fnmatch.filter(branches, '*_z'))
         flip(neg, fnmatch.filter(branches, '*_z')+fnmatch.filter(branches, '*_eta'))
+        augment(pos)
+        augment(neg)
+
         yield pos
         yield neg
 
@@ -284,6 +302,80 @@ def flip(event, z_flip_branches):
     for df in [event.rechits, event.simclusters, event.simtracks]:
         for z_branch in z_flip_branches:
             if z_branch in df.keys: df.array[:,df.keys.index(z_branch)] *= -1.
+
+
+def augment(event: Event):
+    """
+    Adds some redundant but helpful-for-training information to the event.
+    """
+    # Some augmentation: add spherical coordinates on top of cartesion ones for rechits
+    x = event.rechits.get('RecHitHGC_x')
+    y = event.rechits.get('RecHitHGC_y')
+    z = event.rechits.get('RecHitHGC_z')
+
+    T = np.sqrt(x**2+y**2) # distance in Transverse plane
+    theta = np.arctan2(T, z)
+    eta = -np.log(np.tan(theta/2))
+
+    bad_rows = np.concatenate((
+        np.nonzero(~np.isfinite(theta))[0],
+        np.nonzero(~np.isfinite(eta))[0]
+        ))
+    if len(bad_rows):
+        logger.error(
+            f'Found non-finite numbers at indices {bad_rows}:\n'
+            f'{event.rechits.array[bad_rows]}'
+            )
+        raise Exception
+
+    R = np.sqrt(x**2+y**2+z**2)
+    phi = np.arctan2(x, y) # Assuming phi=0 points vertically upward
+    # Map to -pi ... pi
+    phi %= 2.*np.pi
+    phi[phi > np.pi] -= 2.*np.pi
+
+    event.rechits.add_column('RecHitHGC_theta', theta)
+    event.rechits.add_column('RecHitHGC_eta', eta)
+    event.rechits.add_column('RecHitHGC_phi', phi)
+    event.rechits.add_column('RecHitHGC_R', R)
+
+    # Add a sensible cluster number
+    y = event.rechits.get('RecHitHGC_MergedSimClusterBestMatchIdx')
+    y_incremental = incremental_cluster_index(y, noise_index=-1)
+    event.rechits.add_column('RecHitHGC_incrClusterIdx', y_incremental)
+
+    # Sort rechits by this sensible cluster number
+    order = y_incremental.argsort()
+    event.rechits.array = event.rechits.array[order]
+
+
+def incremental_cluster_index(input: np.array, noise_index=None):
+    """
+    Build a map that translates arbitrary indices to ordered starting from zero
+
+    By default the first unique index will be 0 in the output, the next 1, etc.
+    E.g. [13 -1 -1 13 -1 13 13 42 -1 -1] -> [0 1 1 0 1 0 0 2 1 1]
+
+    If noise_index is not None, the output will be 0 where input==noise_index:
+    E.g. noise_index=-1, [13 -1 -1 13 -1 13 13 42 -1 -1] -> [1 0 0 1 0 1 1 2 0 0]
+
+    If noise_index is not None but the input does not contain noise_index, 0
+    will still be reserved for it:
+    E.g. noise_index=-1, [13 4 4 13 4 13 13 42 4 4] -> [1 2 2 1 2 1 1 3 2 2]
+    """
+    unique_indices, locations = np.unique(input, return_inverse=True)
+    cluster_index_map = np.arange(unique_indices.shape[0])
+    if noise_index is not None:
+        if noise_index in unique_indices:
+            # Sort so that 0 aligns with the noise_index
+            cluster_index_map = cluster_index_map[(unique_indices != noise_index).argsort()]
+        else:
+            # Still reserve 0 for noise, even if it's not present
+            cluster_index_map += 1
+    return np.take(cluster_index_map, locations)
+
+
+
 
 
 def cli_produce_worker(tup):
@@ -342,12 +434,17 @@ def cli_ls():
 
     for npzfile in args.npzfiles:
         event = Event.load(npzfile)
+        y = event.rechits.get("RecHitHGC_incrClusterIdx")
+        n_noise = (y==0).sum()
+        n_clusters = len(np.unique(y)) - 1 # don't count the noise cluster
         print(
             f'<Event'
             f'\n  metadata={format_and_indent(event.metadata)}'
             f'\n  rechits:'
             f'\n    shape={event.rechits.array.shape}'
             f'\n    keys={format_and_indent(event.rechits.keys)}'
+            f'\n    n_noise={n_noise}'
+            f'\n    n_clusters (non-noise)={n_clusters}'
             f'\n  simtracks:'
             f'\n    shape={event.simtracks.array.shape}'
             f'\n    keys={format_and_indent(event.simtracks.keys)}'
