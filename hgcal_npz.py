@@ -2,6 +2,8 @@ import os, os.path as osp, logging, uuid, fnmatch, pprint
 from contextlib import contextmanager
 
 import numpy as np
+import awkward as ak
+import pickle
 
 VERSION = '0.1'
 
@@ -94,29 +96,17 @@ class DataFrame:
     def __len__(self):
         return len(self.array)
 
-    def __eq__(self, other):
-        return self.keys == other.keys and np.array_equal(self.array, other.array)
-
     def copy(self):
         copy = DataFrame()
         copy.keys = self.keys.copy()
-        copy.array = self.array[:]
+        copy.array = self.array
         return copy
-
-    def to_numpy(self, columns=None):
-        """
-        Returns a numpy array of the requested columns.
-        If `columns` is None, all columns are returned
-        """
-        if columns is None: return self.array
-        selected_col_idxs = np.array([self.keys.index(c) for c in columns])
-        return self.array[:,selected_col_idxs]
 
     def get(self, key):
         """
         Gets a single column
         """
-        return self.array[:, self.keys.index(key)].flatten()
+        return self.array[key]
 
     def add_column(self, key, vals):
         """
@@ -124,7 +114,7 @@ class DataFrame:
         """
         assert key not in self.keys
         self.keys.append(key)
-        self.array = np.column_stack((self.array, np.array(vals)))
+        self.array = ak.with_field((self.array, vals, key))
 
 
 class Event:
@@ -149,9 +139,8 @@ class Event:
 
     def __init__(self):
         self.metadata = {'version': VERSION}
-        self.rechits = DataFrame()
-        self.simtracks = DataFrame()
-        self.simclusters = DataFrame()
+        self.trigger_cells = DataFrame()
+        self.wafers = DataFrame()
 
     def copy(self):
         copy = Event()
@@ -162,108 +151,109 @@ class Event:
         return copy
 
     def save(self, outfile):
-        do_stageout = False
-        if is_remote(outfile):
-            import seutils
-            remote_outfile = outfile
-            outfile = uid() + '.npz'
-            do_stageout = True
-        logger.info('Dumping to %s', outfile)
-        # Automatically create parent directory if not existent
-        outdir = osp.dirname(osp.abspath(outfile))
-        if not osp.isdir(outdir):
-            os.makedirs(outdir)
+        try:
+            do_stageout = False
+            if is_remote(outfile):
+                import seutils
+                remote_outfile = outfile
+                outfile = uid() + '.pkl'
+                do_stageout = True
+            logger.info('Dumping to %s', outfile)
+            # Automatically create parent directory if not existent
+            outdir = osp.dirname(osp.abspath(outfile))
+            if not osp.isdir(outdir):
+                os.makedirs(outdir)
 
-        np.savez(
-            outfile,
-            metadata = self.metadata,
-            rechits_keys = self.rechits.keys,
-            rechits_array = self.rechits.array,
-            simtracks_keys = self.simtracks.keys,
-            simtracks_array = self.simtracks.array,
-            simclusters_keys = self.simclusters.keys,
-            simclusters_array = self.simclusters.array,
-            )
-
-        if do_stageout:
-            logger.info('Staging out %s -> %s', outfile, remote_outfile)
-            seutils.cp(outfile, remote_outfile)
-            os.remove(outfile)
+            # Prepare data to be pickled
+            data = {
+                'metadata': self.metadata,
+                'trigger_cells_keys': self.trigger_cells.keys,
+                'trigger_cells_array': self.trigger_cells.array,
+                'wafers_keys': self.wafers.keys,
+                'wafers_array': self.wafers.array,
+            }
 
 
-def events_factory(rootfile):
+            with open(outfile, 'wb') as f:
+                pickle.dump(data, f)
+
+
+            if do_stageout:
+                logger.info('Staging out %s -> %s', outfile, remote_outfile)
+                seutils.cp(outfile, remote_outfile)
+                os.remove(outfile)
+
+        except Exception as e:
+            logger.error(f"Failed to save event {self.metadata['i_event']} to {outfile}: {e}")
+
+
+def events_factory(rootfile,tree_name):
     """
     Iterates Event instances from a rootfile.
     """
     branches = [
-        'RecHitHGC_x',
-        'RecHitHGC_y',
-        'RecHitHGC_z',
-        'RecHitHGC_energy',
-        'RecHitHGC_time',
-        'RecHitHGC_MergedSimClusterBestMatchIdx',
-        'RecHitHGC_MergedSimClusterBestMatchQual',
-
-        'MergedSimCluster_impactPoint_eta',
-        'MergedSimCluster_impactPoint_phi',
-        'MergedSimCluster_impactPoint_x',
-        'MergedSimCluster_impactPoint_y',
-        'MergedSimCluster_impactPoint_z',
-        'MergedSimCluster_boundaryEnergy',
-        'MergedSimCluster_recEnergy',
-        'MergedSimCluster_pdgId',
-        'MergedSimCluster_trackIdAtBoundary',
-
-        'SimTrack_pdgId',
-        'SimTrack_trackId',
-        'SimTrack_boundaryMomentum_eta',
-        'SimTrack_boundaryMomentum_phi',
-        'SimTrack_boundaryMomentum_pt',
-        'SimTrack_boundaryPos_x',
-        'SimTrack_boundaryPos_y',
-        'SimTrack_boundaryPos_z',
-        'SimTrack_eta',
-        'SimTrack_phi',
-        'SimTrack_pt',
-        'SimTrack_trackIdAtBoundary',
-        'SimTrack_crossedBoundary',
-        ]
+    'tc_x',
+    'tc_y',
+    'tc_z',
+    'tc_energy',
+    'wafer_x',
+    'wafer_y',
+    'wafer_z',
+    'wafer_energy',
+    ]
     
     import uproot
     with local_copy(rootfile) as local:
-        with uproot.open(local + ':Events') as t:
+        with uproot.open(local + ':' + tree_name) as t:
             hlarray = t.arrays(branches)
+            num_events = t.num_entries
+            logger.info(f"Number of events in tree: {num_events}")
 
-    rechit_keys = fnmatch.filter(branches, 'RecHitHGC_*')
-    simtrack_keys = fnmatch.filter(branches, 'SimTrack_*')
-    simcluster_keys = fnmatch.filter(branches, 'MergedSimCluster_*')
+    tc_keys = fnmatch.filter(branches, 'tc_*')
+    wafer_keys = fnmatch.filter(branches, 'wafer_*')
 
-    for i in range(len(hlarray)):
+    for i in range(num_events):
+        logger.info(f"Processing event {i+1}/{num_events}")
         event = Event()
         event.metadata['rootfile'] = rootfile
         event.metadata['i_event'] = i
-        event.rechits.keys = rechit_keys
-        event.simtracks.keys = simtrack_keys
-        event.simclusters.keys = simcluster_keys
 
-        # Build the rectangular array from the keys
-        for df in [event.rechits, event.simtracks, event.simclusters]:
-            df.array = np.stack([hlarray[key][i].to_numpy() for key in df.keys]).T
+        event.trigger_cells.keys = tc_keys
+        event.wafers.keys = wafer_keys
 
-        # Filter out hits with z=0 - not sure why these appear
-        z_zero = event.rechits.get('RecHitHGC_z') == 0.
-        n_z_zero_hits = z_zero.sum()
-        if n_z_zero_hits:
-            logger.warning(f'Filtering out {n_z_zero_hits} hits with z=0')
-            event.rechits.array = event.rechits.array[~z_zero]
+        try:
+            # Build the arrays for trigger cells
+            tc_data = {key: hlarray[key][i] for key in event.trigger_cells.keys}
+            # Check if there is data
+            if len(tc_data[event.trigger_cells.keys[0]]) == 0:
+                logger.warning(f"No trigger cell data in event {i}")
+                continue  # Skip events with no data
 
-        pos, neg = split(event, fnmatch.filter(branches, '*_z'))
-        flip(neg, fnmatch.filter(branches, '*_z')+fnmatch.filter(branches, '*_eta'))
-        augment(pos)
-        augment(neg)
+            # Create an awkward record array
+            event.trigger_cells.array = ak.zip(tc_data)
+            logger.info(f"Trigger cells array length: {len(event.trigger_cells.array)}")
+            logger.info(f"Trigger cells array type: {event.trigger_cells.array.type}")
+        except Exception as e:
+            logger.error(f"Error processing trigger cells for event {i}: {e}")
+            continue
 
-        yield pos
-        yield neg
+        try:
+            # Build the arrays for wafers
+            wafer_data = {key: hlarray[key][i] for key in event.wafers.keys}
+            # Check if there is data
+            if len(wafer_data[event.wafers.keys[0]]) == 0:
+                logger.warning(f"No wafer data in event {i}")
+                continue  # Skip events with no data
+
+            # Create an awkward record array
+            event.wafers.array = ak.zip(wafer_data)
+            logger.info(f"Wafers array length: {len(event.wafers.array)}")
+            logger.info(f"Wafers array type: {event.wafers.array.type}")
+        except Exception as e:
+            logger.error(f"Error processing wafers for event {i}: {e}")
+            continue
+
+        yield event
 
 
 def split(event, z_split_branches):
@@ -378,23 +368,17 @@ def incremental_cluster_index(input: np.array, noise_index=None):
 
 
 
-def cli_produce_worker(tup):
-    """
-    Multiprocessing worker for cli_produce
-    """
-    args, rootfile = tup
-    n_done = 0
-    for event in events_factory(rootfile):
-        if args.n and n_done==args.n: return
-        dst = osp.join(
-            args.outdir,
-            osp.basename(rootfile).replace(
-                '.root',
-                f'_{event.metadata["i_event"]:03d}_{event.metadata["endcap"]}.npz'
-                )
-            )
-        event.save(dst)
-        n_done += 1
+def cli_produce_worker(args):
+    rootfile, outdir, tree_name = args
+    basename = osp.basename(rootfile)
+    logger.info(f'Processing rootfile {rootfile}')
+    for event in events_factory(rootfile, tree_name):
+        outfile = osp.join(
+            outdir,
+            basename.replace('.root', '') +
+            f'_{event.metadata["i_event"]:03d}.npz'
+        )
+        event.save(outfile)
 
 
 def cli_produce():
@@ -407,12 +391,15 @@ def cli_produce():
     parser.add_argument('-d', '--outdir', type=str, help='Destination directory', required=True)
     parser.add_argument('-n', type=int, help='Max nr. of events to process (default=all)')
     parser.add_argument('--nthreads', type=int, default=1, help='Number of simultaneous processes (does one rootfile per process)')
+    parser.add_argument('--tree_name', type=str, default='Events', help='Name of the tree to process (default: Events)')
     args = parser.parse_args()
+    rootfiles = args.rootfiles
+    outdir = args.outdir
 
     if not is_remote(args.outdir) and not osp.isdir(args.outdir): os.makedirs(args.outdir)
     if args.n and args.nthreads>1: logger.warning('-n works PER THREAD!')
 
-    mp_args = [(args, rootfile) for rootfile in expand_wildcards(args.rootfiles)]
+    mp_args = [(rootfile, outdir, args.tree_name) for rootfile in expand_wildcards(args.rootfiles)]
     import multiprocessing as mp
     p = mp.Pool(args.nthreads)
     p.map(cli_produce_worker, mp_args)
@@ -452,4 +439,6 @@ def cli_ls():
             f'\n    shape={event.simclusters.array.shape}'
             f'\n    keys={format_and_indent(event.simclusters.keys)}'
             )
- 
+
+if __name__ == '__main__':
+    cli_produce()
